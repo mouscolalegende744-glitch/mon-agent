@@ -1,24 +1,51 @@
 name: Agent
 on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
+    inputs:
+      task:
+        description: "Tâche à exécuter (vide = contenu de task.txt)"
+        required: false
+        default: ""
   schedule:
     - cron: "17 7 * * *"
 permissions:
   contents: write
+  issues: write
+concurrency:
+  group: agent-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
 jobs:
   run:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event.sender.login == github.repository_owner
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python agent.py
+      - name: Agent
+        run: python agent.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - run: |
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          TASK_INPUT: ${{ github.event.inputs.task }}
+      - name: Enregistrer les changements
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           git config user.name "agent-bot"
           git config user.email "agent-bot@users.noreply.github.com"
-          git add results
-          git commit -m "Nouveau résultat" || echo "rien à enregistrer"
-          git push
+          git add -A -- . ':!.github'
+          git commit -m "Agent : changements" || echo "rien à enregistrer"
+          git pull --rebase origin main || true
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main || echo "push échoué"
